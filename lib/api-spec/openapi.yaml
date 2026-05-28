@@ -1,0 +1,770 @@
+openapi: 3.1.0
+info:
+  title: Api
+  version: 0.1.0
+  description: Tashi API specification
+servers:
+  - url: /api
+    description: Base API path
+tags:
+  - name: health
+    description: Health operations
+  - name: auth
+    description: Authentication operations
+  - name: products
+    description: Product management
+  - name: qrcodes
+    description: QR code management
+  - name: users
+    description: User management
+  - name: scans
+    description: Scan history
+  - name: ads
+    description: Ad banner management
+  - name: orders
+    description: Order management
+paths:
+  /healthz:
+    get:
+      operationId: healthCheck
+      tags: [health]
+      summary: Health check
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+
+  /auth/login:
+    post:
+      operationId: login
+      tags: [auth]
+      summary: Login with email and password
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+        "401":
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /auth/me:
+    get:
+      operationId: getMe
+      tags: [auth]
+      summary: Get current user profile
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Current user profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /users:
+    get:
+      operationId: listUsers
+      tags: [users]
+      summary: List all users (admin only)
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: List of users
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/User"
+    post:
+      operationId: createUser
+      tags: [users]
+      summary: Create a new user (admin only)
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateUserRequest"
+      responses:
+        "201":
+          description: User created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /products:
+    get:
+      operationId: listProducts
+      tags: [products]
+      summary: List all products
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: List of products
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Product"
+    post:
+      operationId: createProduct
+      tags: [products]
+      summary: Create a product (admin only)
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateProductRequest"
+      responses:
+        "201":
+          description: Product created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Product"
+
+  /products/{id}:
+    put:
+      operationId: updateProduct
+      tags: [products]
+      summary: Update a product (admin only)
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateProductRequest"
+      responses:
+        "200":
+          description: Product updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Product"
+    delete:
+      operationId: deleteProduct
+      tags: [products]
+      summary: Delete a product (admin only)
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Product deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
+  /qrcodes:
+    get:
+      operationId: listQRCodes
+      tags: [qrcodes]
+      summary: List all QR codes (admin only)
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: List of QR codes
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/QRCode"
+    post:
+      operationId: createQRCode
+      tags: [qrcodes]
+      summary: Create a QR code (admin only)
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateQRCodeRequest"
+      responses:
+        "201":
+          description: QR code created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QRCode"
+
+  /qrcodes/scan:
+    post:
+      operationId: scanQRCode
+      tags: [qrcodes]
+      summary: Scan and validate a QR code
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ScanQRCodeRequest"
+      responses:
+        "200":
+          description: QR code scanned successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScanResult"
+        "400":
+          description: Invalid or already used QR code
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /scans:
+    get:
+      operationId: listScans
+      tags: [scans]
+      summary: List scan history for current user
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: List of scans
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Scan"
+
+  /ads:
+    get:
+      operationId: listAds
+      tags: [ads]
+      summary: List all ad banners
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: List of ads
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Ad"
+    post:
+      operationId: createAd
+      tags: [ads]
+      summary: Create an ad banner (admin only)
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAdRequest"
+      responses:
+        "201":
+          description: Ad created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Ad"
+
+  /orders:
+    get:
+      operationId: listOrders
+      tags: [orders]
+      summary: List orders for current salesman (or all if admin)
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: List of orders
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Order"
+    post:
+      operationId: createOrder
+      tags: [orders]
+      summary: Create a new order (salesman only)
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateOrderRequest"
+      responses:
+        "201":
+          description: Order created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+
+  /orders/retailers:
+    get:
+      operationId: listRetailers
+      tags: [orders]
+      summary: Search retailers for order creation
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: search
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: List of retailers
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/RetailerSummary"
+
+  /orders/my-bonus:
+    get:
+      operationId: getMyBonus
+      tags: [orders]
+      summary: Get salesman bonus summary
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Bonus summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BonusSummary"
+
+  /orders/{id}/status:
+    put:
+      operationId: updateOrderStatus
+      tags: [orders]
+      summary: Update order status (admin only)
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateOrderStatusRequest"
+      responses:
+        "200":
+          description: Order updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+
+  /ads/{id}:
+    delete:
+      operationId: deleteAd
+      tags: [ads]
+      summary: Delete an ad banner (admin only)
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Ad deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+      required:
+        - status
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+      required:
+        - error
+
+    SuccessResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+      required:
+        - success
+
+    LoginRequest:
+      type: object
+      properties:
+        email:
+          type: string
+        password:
+          type: string
+      required:
+        - email
+        - password
+
+    AuthResponse:
+      type: object
+      properties:
+        token:
+          type: string
+        user:
+          $ref: "#/components/schemas/User"
+      required:
+        - token
+        - user
+
+    User:
+      type: object
+      properties:
+        id:
+          type: integer
+        email:
+          type: string
+        role:
+          type: string
+          enum: [admin, salesman, mechanic, retailer]
+        points:
+          type: integer
+        createdAt:
+          type: string
+      required:
+        - id
+        - email
+        - role
+        - points
+        - createdAt
+
+    CreateUserRequest:
+      type: object
+      properties:
+        email:
+          type: string
+        password:
+          type: string
+        role:
+          type: string
+          enum: [admin, salesman, mechanic, retailer]
+      required:
+        - email
+        - password
+        - role
+
+    Product:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        points:
+          type: integer
+        createdAt:
+          type: string
+      required:
+        - id
+        - name
+        - points
+        - createdAt
+
+    CreateProductRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        points:
+          type: integer
+      required:
+        - name
+        - points
+
+    QRCode:
+      type: object
+      properties:
+        id:
+          type: integer
+        qrNumber:
+          type: string
+        productId:
+          type: integer
+        productName:
+          type: string
+        points:
+          type: integer
+        status:
+          type: string
+          enum: [unused, used]
+        createdAt:
+          type: string
+      required:
+        - id
+        - qrNumber
+        - productId
+        - productName
+        - points
+        - status
+        - createdAt
+
+    CreateQRCodeRequest:
+      type: object
+      properties:
+        qrNumber:
+          type: string
+        productId:
+          type: integer
+      required:
+        - qrNumber
+        - productId
+
+    ScanQRCodeRequest:
+      type: object
+      properties:
+        qrNumber:
+          type: string
+      required:
+        - qrNumber
+
+    ScanResult:
+      type: object
+      properties:
+        pointsEarned:
+          type: integer
+        totalPoints:
+          type: integer
+        productName:
+          type: string
+        message:
+          type: string
+      required:
+        - pointsEarned
+        - totalPoints
+        - productName
+        - message
+
+    Scan:
+      type: object
+      properties:
+        id:
+          type: integer
+        qrNumber:
+          type: string
+        productName:
+          type: string
+        pointsEarned:
+          type: integer
+        scannedAt:
+          type: string
+      required:
+        - id
+        - qrNumber
+        - productName
+        - pointsEarned
+        - scannedAt
+
+    Ad:
+      type: object
+      properties:
+        id:
+          type: integer
+        imageBase64:
+          type: string
+        title:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+      required:
+        - id
+        - imageBase64
+        - createdAt
+
+    CreateAdRequest:
+      type: object
+      properties:
+        imageBase64:
+          type: string
+        title:
+          type: string
+      required:
+        - imageBase64
+
+    Order:
+      type: object
+      properties:
+        id:
+          type: integer
+        salesmanId:
+          type: integer
+        retailerId:
+          type: integer
+        productId:
+          type: integer
+        quantity:
+          type: integer
+        totalPoints:
+          type: integer
+        bonusPoints:
+          type: integer
+        status:
+          type: string
+          enum: [pending, confirmed, cancelled]
+        productName:
+          type: string
+          nullable: true
+        retailerName:
+          type: string
+          nullable: true
+        retailerPhone:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+      required:
+        - id
+        - salesmanId
+        - retailerId
+        - productId
+        - quantity
+        - totalPoints
+        - bonusPoints
+        - status
+        - createdAt
+
+    CreateOrderRequest:
+      type: object
+      properties:
+        retailerId:
+          type: integer
+        productId:
+          type: integer
+        quantity:
+          type: integer
+      required:
+        - retailerId
+        - productId
+        - quantity
+
+    UpdateOrderStatusRequest:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [pending, confirmed, cancelled]
+      required:
+        - status
+
+    RetailerSummary:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+          nullable: true
+        phone:
+          type: string
+        city:
+          type: string
+          nullable: true
+      required:
+        - id
+        - phone
+
+    BonusSummary:
+      type: object
+      properties:
+        totalBonus:
+          type: integer
+        confirmedBonus:
+          type: integer
+        orders:
+          type: array
+          items:
+            $ref: "#/components/schemas/Order"
+      required:
+        - totalBonus
+        - confirmedBonus
+        - orders

@@ -1,0 +1,12 @@
+{
+  "expo": {
+    "extra": {
+      "eas": {
+        "projectId": "1403b75b-b746-4718-ba36-5021b7cbcdbf"
+      }
+    },
+    "android": {
+      "package": "com.tashibrakes.workspace"
+    }
+  }
+}

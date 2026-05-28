@@ -1,0 +1,36 @@
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -t
+      - $_IMAGE_TAG
+      - .
+
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - $_IMAGE_TAG
+
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - $_SERVICE_NAME
+      - --image=$_IMAGE_TAG
+      - --region=$_REGION
+      - --platform=managed
+      - --allow-unauthenticated
+      - --port=8080
+      - --set-env-vars=NODE_ENV=production
+
+substitutions:
+  _SERVICE_NAME: tashi-api
+  _REGION: us-central1
+  _IMAGE_TAG: gcr.io/$PROJECT_ID/tashi-api:$SHORT_SHA
+
+images:
+  - $_IMAGE_TAG
+
+options:
+  logging: CLOUD_LOGGING_ONLY

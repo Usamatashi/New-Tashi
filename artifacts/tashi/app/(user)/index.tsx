@@ -1,0 +1,963 @@
+import React, { useCallback, useEffect, useRef, useState, memo, useMemo } from "react";
+import { getApiUrl } from "@/constants/api";
+import { VideoView, useVideoPlayer } from "expo-video";
+import {
+  ActivityIndicator,
+  Animated,
+  Dimensions,
+  Linking,
+  Modal,
+  Platform,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from "react-native";
+import { Image } from "expo-image";
+import { LinearGradient } from "expo-linear-gradient";
+import { Feather, FontAwesome } from "@expo/vector-icons";
+import { router } from "expo-router";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useAuth } from "@/context/AuthContext";
+import { Colors } from "@/constants/colors";
+import TickerMarquee from "@/components/TickerMarquee";
+import { BrakePadCard } from "@/components/BrakePadCard";
+import { apiFetch } from "@/lib/api";
+import { STATIC_DATA_QUERY_OPTIONS } from "@/lib/queryClient";
+
+const profilePicKey = (userId?: number) => `tashi_profile_pic_${userId ?? "unknown"}`;
+
+const { width: SCREEN_WIDTH } = Dimensions.get("window");
+const BANNER_WIDTH = SCREEN_WIDTH - 32;
+const DEFAULT_WHATSAPP = "923055198651";
+
+interface ClaimRecord {
+  id: number;
+  pointsClaimed: number;
+  status: "pending" | "received";
+  claimedAt: string;
+}
+
+interface AdBanner {
+  id: number;
+  imageBase64?: string;
+  mediaUrl?: string;
+  mediaType?: string;
+  title: string | null;
+}
+
+function BannerVideo({ uri, width }: { uri: string; width: number }) {
+  const player = useVideoPlayer(uri, (p) => {
+    p.loop = true;
+    p.muted = true;
+    p.play();
+  });
+  return (
+    <VideoView
+      player={player}
+      style={{ width, height: 140, borderRadius: 18 }}
+      contentFit="cover"
+      nativeControls={false}
+    />
+  );
+}
+
+interface TickerItem {
+  id: number;
+  text: string;
+}
+
+function formatDate(iso: string) {
+  const d = new Date(iso);
+  return d.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }) +
+    "  " + d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+}
+
+
+const FALLBACK_BANNERS = [
+  { bg: Colors.primary, title: "Welcome to Tashi!", subtitle: "Earn points with every service visit" },
+  { bg: "#C5611A", title: "Scan & Earn", subtitle: "Scan QR codes after every service" },
+  { bg: "#1A2D2D", title: "Redeem Rewards", subtitle: "Turn your points into real benefits" },
+];
+
+const BASE_QUICK_ACTIONS = [
+  { label: "Scan History", desc: "All your scans", icon: "📋", route: "/(user)/history", accent: "#EDFBF3", iconBg: "#B8F0CE" },
+  { label: "Rewards", desc: "Redeem points", icon: "🎁", route: "/(user)/rewards", accent: "#ECF5FF", iconBg: "#C2DCFF" },
+];
+
+const RETAILER_QUICK_ACTIONS = [
+  { label: "Disc Pads", desc: "Browse disc pad products", icon: "circle" as const, route: "/(user)/products?category=disc_pad", accent: "#FFF4EC", iconBg: "#FFEDD5", iconColor: "#E87722" },
+  { label: "Brake Shoes", desc: "Browse catalog", icon: "truck" as const, route: "/(user)/products?category=brake_shoes", accent: "#EFF6FF", iconBg: "#DBEAFE", iconColor: "#2563EB" },
+];
+
+const SALESMAN_QUICK_ACTIONS = [
+  { label: "Disc Pads", desc: "Browse disc pad products", icon: "circle" as const, route: "/(user)/products?category=disc_pad", accent: "#FFF4EC", iconBg: "#FFEDD5", iconColor: "#E87722" },
+  { label: "Brake Shoes", desc: "Browse catalog", icon: "truck" as const, route: "/(user)/products?category=brake_shoes", accent: "#EFF6FF", iconBg: "#DBEAFE", iconColor: "#2563EB" },
+];
+
+const HomeHeader = memo(({ 
+  user, 
+  firstName, 
+  headerSub, 
+  profilePic, 
+  whatsappNumber 
+}: { 
+  user: any; 
+  firstName: string; 
+  headerSub: string; 
+  profilePic: string | null; 
+  whatsappNumber: string;
+}) => {
+  return (
+    <View style={styles.header}>
+      <View style={styles.headerLeft}>
+        <TouchableOpacity
+          onPress={() => router.push("/(user)/profile" as any)}
+          style={[styles.headerAvatar, { borderColor: `${(Colors.roles as any)[user?.role || ""] || Colors.primary}50` }]}
+          activeOpacity={0.8}
+        >
+          {profilePic ? (
+            <Image source={{ uri: profilePic }} style={styles.headerAvatarImg} />
+          ) : (
+            <View style={[styles.headerAvatarFallback, { backgroundColor: (Colors.roles as any)[user?.role || ""] || Colors.primary }]}>
+              <Text style={styles.headerAvatarText}>
+                {(user?.name?.[0] || user?.phone?.[0] || "U").toUpperCase()}
+              </Text>
+            </View>
+          )}
+        </TouchableOpacity>
+        <View>
+          <Text style={styles.headerGreet}>Hello, {firstName} 👋</Text>
+          <Text style={styles.headerSub}>{headerSub}</Text>
+        </View>
+      </View>
+      <TouchableOpacity
+        onPress={() => Linking.openURL(`whatsapp://send?phone=${whatsappNumber}`)}
+        style={styles.waBtn}
+      >
+        <FontAwesome name="whatsapp" size={22} color="#25D366" />
+      </TouchableOpacity>
+    </View>
+  );
+});
+
+const PointsHeroCard = memo(({ 
+  displayPoints, 
+  openClaimModal, 
+  blinkAnim, 
+  pulseAnim 
+}: { 
+  displayPoints: number; 
+  openClaimModal: () => void; 
+  blinkAnim: any; 
+  pulseAnim: any; 
+}) => {
+  return (
+    <LinearGradient
+      colors={["#FF9A3C", "#E87722", "#C5611A"]}
+      start={{ x: 0, y: 0 }}
+      end={{ x: 1, y: 1 }}
+      style={styles.heroCard}
+    >
+      <View style={styles.decCircle1} />
+      <View style={styles.decCircle2} />
+      <View style={styles.decCircle3} />
+      <View style={styles.decCircle4} />
+      <View style={styles.heroTopRow}>
+        <View style={styles.heroBadge}>
+          <Text style={styles.heroBadgeText}>🏅 Loyalty Points</Text>
+        </View>
+      </View>
+      <View style={styles.heroPointsRow}>
+        <Text style={styles.heroValue}>{displayPoints}</Text>
+        <Text style={styles.heroUnit}>pts</Text>
+      </View>
+      <Text style={styles.heroSub}>Your available balance</Text>
+      <View style={styles.heroDivider} />
+      <View style={styles.heroBottom}>
+        <View style={styles.heroBottomLeft}>
+          <Text style={styles.heroBottomLabel}>Ready to redeem</Text>
+          <Text style={styles.heroBottomSub}>Claim your points anytime</Text>
+        </View>
+        {displayPoints > 0 ? (
+          <Animated.View style={{ opacity: blinkAnim, transform: [{ scale: pulseAnim }] }}>
+            <TouchableOpacity onPress={openClaimModal} activeOpacity={0.85} style={styles.claimChip}>
+              <Text style={styles.claimChipText}>🎁  Claim</Text>
+            </TouchableOpacity>
+          </Animated.View>
+        ) : (
+          <View style={styles.claimChipDisabled}>
+            <Text style={styles.claimChipDisabledText}>No points yet</Text>
+          </View>
+        )}
+      </View>
+    </LinearGradient>
+  );
+});
+
+const SalesHeroCard = memo(({ salesSummary }: { salesSummary: any }) => {
+  return (
+    <TouchableOpacity onPress={() => router.push("/(user)/orders" as any)} activeOpacity={0.88}>
+      <LinearGradient
+        colors={["#0F4C75", "#1B6CA8", "#187CC2"]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.heroCard}
+      >
+        <View style={styles.decCircle1} />
+        <View style={styles.decCircle2} />
+        <View style={styles.decCircle3} />
+        <Text style={styles.heroLabel}>
+          {`${new Date().toLocaleString("en-US", { month: "long" })} Sales`}
+        </Text>
+        <Text style={[styles.heroValue, { fontSize: 34 }]}>
+          {salesSummary ? `Rs. ${(salesSummary.totalSalesValue || 0).toLocaleString()}` : "—"}
+        </Text>
+      </LinearGradient>
+    </TouchableOpacity>
+  );
+});
+
+// ─── Main Screen ──────────────────────────────────────────────────────────────
+export default function UserHomeScreen() {
+  const { user, refreshUser } = useAuth();
+  const insets = useSafeAreaInsets();
+  const qc = useQueryClient();
+
+  const [profilePic, setProfilePic] = useState<string | null>(null);
+  const [bannerIndex, setBannerIndex] = useState(0);
+  const scrollRef = useRef<ScrollView>(null);
+  const blinkAnim = useRef(new Animated.Value(1)).current;
+  const pulseAnim = useRef(new Animated.Value(1)).current;
+  const [claimModalVisible, setClaimModalVisible] = useState(false);
+  const [claiming, setClaiming] = useState(false);
+  const [localPoints, setLocalPoints] = useState<number | null>(null);
+  const [claimHistory, setClaimHistory] = useState<ClaimRecord[]>([]);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+  const [justClaimed, setJustClaimed] = useState<number | null>(null);
+
+  const { data: adBanners = [] } = useQuery<AdBanner[]>({
+    queryKey: ["ads"],
+    queryFn: () => apiFetch("/ads"),
+    ...STATIC_DATA_QUERY_OPTIONS,
+  });
+
+  const { data: tickers = [] } = useQuery<TickerItem[]>({
+    queryKey: ["ticker"],
+    queryFn: () => apiFetch("/ticker"),
+    ...STATIC_DATA_QUERY_OPTIONS,
+  });
+
+  const { data: whatsappData } = useQuery<Record<string, string>>({
+    queryKey: ["whatsapp-contacts"],
+    queryFn: () => apiFetch("/whatsapp-contacts"),
+    enabled: !!user?.role,
+    ...STATIC_DATA_QUERY_OPTIONS,
+  });
+
+  const { data: salesSummary } = useQuery<any>({
+    queryKey: ["orders-summary"],
+    queryFn: () => apiFetch("/orders/my-bonus"),
+    enabled: user?.role === "salesman",
+  });
+
+  const { data: orders = [] } = useQuery<any[]>({
+    queryKey: ["orders-list"],
+    queryFn: () => apiFetch("/orders"),
+    enabled: user?.role === "salesman",
+  });
+
+  const { data: retailOrders = [] } = useQuery<any[]>({
+    queryKey: ["retail-orders-list"],
+    queryFn: () => apiFetch("/orders/my-retail-orders"),
+    enabled: user?.role === "retailer",
+  });
+
+  const pendingOrderCount = useMemo(() => orders.filter(o => o.status === "pending").length, [orders]);
+  
+  const retailStats = useMemo(() => {
+    const confirmed = retailOrders.filter(o => o.status === "confirmed");
+    return {
+      confirmedCount: confirmed.length,
+      confirmedValue: confirmed.reduce((s, o) => s + (o.totalValue ?? 0), 0),
+    };
+  }, [retailOrders]);
+
+  const [refreshing, setRefreshing] = useState(false);
+  
+  const whatsappNumber = useMemo(() => {
+    if (!whatsappData || !user?.role) return DEFAULT_WHATSAPP;
+    const role = user.role as "mechanic" | "salesman" | "retailer";
+    return whatsappData[role] || DEFAULT_WHATSAPP;
+  }, [whatsappData, user?.role]);
+
+  useEffect(() => { refreshUser(); }, []);
+  useEffect(() => {
+    if (!user?.id) return;
+    AsyncStorage.getItem(profilePicKey(user.id)).then((uri) => { if (uri) setProfilePic(uri); else setProfilePic(null); });
+  }, [user?.id]);
+  useEffect(() => {
+    if (user?.points !== undefined) setLocalPoints(user.points);
+  }, [user?.points]);
+
+  const currentPoints = localPoints ?? user?.points ?? 0;
+  useEffect(() => {
+    if (currentPoints > 0) {
+      const anim = Animated.loop(
+        Animated.sequence([
+          Animated.parallel([
+            Animated.timing(blinkAnim, { toValue: 0.55, duration: 750, useNativeDriver: true }),
+            Animated.timing(pulseAnim, { toValue: 1.06, duration: 750, useNativeDriver: true }),
+          ]),
+          Animated.parallel([
+            Animated.timing(blinkAnim, { toValue: 1, duration: 750, useNativeDriver: true }),
+            Animated.timing(pulseAnim, { toValue: 1, duration: 750, useNativeDriver: true }),
+          ]),
+        ])
+      );
+      anim.start();
+      return () => anim.stop();
+    } else {
+      blinkAnim.setValue(1);
+      pulseAnim.setValue(1);
+    }
+  }, [currentPoints]);
+
+  const activeBanners = adBanners.length > 0 ? adBanners : FALLBACK_BANNERS;
+  const bannerCount = activeBanners.length;
+  const bannerIndexRef = useRef(0);
+  bannerIndexRef.current = bannerIndex;
+
+  useEffect(() => {
+    if (bannerCount <= 1) return;
+    const interval = setInterval(() => {
+      const next = (bannerIndexRef.current + 1) % bannerCount;
+      bannerIndexRef.current = next;
+      setBannerIndex(next);
+      scrollRef.current?.scrollTo({ x: next * BANNER_WIDTH, animated: true });
+    }, 3500);
+    return () => clearInterval(interval);
+  }, [bannerCount]);
+
+  const fetchClaimHistory = useCallback(async () => {
+    setLoadingHistory(true);
+    try {
+      const data = await apiFetch<ClaimRecord[]>("/claims");
+      setClaimHistory(data);
+    } catch {}
+    finally { setLoadingHistory(false); }
+  }, []);
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await Promise.all([
+      refreshUser(),
+      qc.invalidateQueries({ queryKey: ["ads"] }),
+      qc.invalidateQueries({ queryKey: ["ticker"] }),
+      qc.invalidateQueries({ queryKey: ["orders-summary"] }),
+      qc.invalidateQueries({ queryKey: ["orders-list"] }),
+      qc.invalidateQueries({ queryKey: ["retail-orders-list"] }),
+    ]);
+    setRefreshing(false);
+  }, [refreshUser, qc]);
+
+  const openClaimModal = () => {
+    setJustClaimed(null);
+    setClaimModalVisible(true);
+    fetchClaimHistory();
+  };
+
+  const confirmClaim = async () => {
+    setClaiming(true);
+    try {
+      const data = await apiFetch<any>("/claims", { method: "POST" });
+      setJustClaimed(data.pointsClaimed || displayPoints); // fallback if not in response
+      setLocalPoints(0);
+      await refreshUser();
+      await fetchClaimHistory();
+    } catch {}
+    finally { setClaiming(false); }
+  };
+
+  const displayPoints = localPoints ?? user?.points ?? 0;
+  const topPadding = insets.top + (Platform.OS === "web" ? 67 : 0);
+  const firstName = user?.name?.split(" ")[0] || user?.phone || "there";
+  const tickerText = useMemo(
+    () => tickers.map((t) => t.text).join("          •          "),
+    [tickers],
+  );
+
+  const isRetailer = user?.role === "retailer";
+  const isSalesman = user?.role === "salesman";
+  const isMechanic = !isRetailer && !isSalesman;
+
+  const quickActions = isRetailer
+    ? RETAILER_QUICK_ACTIONS
+    : isSalesman
+    ? SALESMAN_QUICK_ACTIONS
+    : BASE_QUICK_ACTIONS;
+
+  const headerSub = isSalesman
+    ? "Your sales dashboard"
+    : isRetailer
+    ? "Your order dashboard"
+    : "Your loyalty dashboard";
+
+  return (
+    <View style={[styles.container, { paddingTop: topPadding }]}>
+      <HomeHeader 
+        user={user} 
+        firstName={firstName} 
+        headerSub={headerSub} 
+        profilePic={profilePic} 
+        whatsappNumber={whatsappNumber} 
+      />
+
+      {isMechanic && tickerText.length > 0 && <TickerMarquee text={tickerText} height={32} />}
+
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + 40 }]}
+        showsVerticalScrollIndicator={false}
+        scrollEnabled={!isSalesman}
+        renderToHardwareTextureAndroid
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.primary} />}
+      >
+
+        {isMechanic && (
+          <PointsHeroCard 
+            displayPoints={displayPoints} 
+            openClaimModal={openClaimModal} 
+            blinkAnim={blinkAnim} 
+            pulseAnim={pulseAnim} 
+          />
+        )}
+
+        {isSalesman && <SalesHeroCard salesSummary={salesSummary} />}
+
+        {/* Banner carousel */}
+        <ScrollView
+          ref={scrollRef}
+          horizontal
+          pagingEnabled
+          showsHorizontalScrollIndicator={false}
+          style={styles.bannerScroll}
+          onMomentumScrollEnd={(e) => {
+            setBannerIndex(Math.round(e.nativeEvent.contentOffset.x / BANNER_WIDTH));
+          }}
+        >
+          {adBanners.length > 0
+            ? adBanners.map((ad) =>
+                ad.mediaType === "video" && ad.mediaUrl ? (
+                  <BannerVideo key={ad.id} uri={ad.mediaUrl} width={BANNER_WIDTH} />
+                ) : ad.mediaUrl ? (
+                  <Image
+                    key={ad.id}
+                    source={{ uri: ad.mediaUrl }}
+                    style={[styles.bannerImage, { width: BANNER_WIDTH }]}
+                    contentFit="cover"
+                    cachePolicy="memory-disk"
+                    recyclingKey={String(ad.id)}
+                  />
+                ) : null
+              )
+            : FALLBACK_BANNERS.map((b, i) => (
+                <LinearGradient
+                  key={i}
+                  colors={[b.bg, "#1A1A1A"]}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={[styles.banner, { width: BANNER_WIDTH }]}
+                >
+                  <Text style={styles.bannerTitle}>{b.title}</Text>
+                  <Text style={styles.bannerSubtitle}>{b.subtitle}</Text>
+                </LinearGradient>
+              ))}
+        </ScrollView>
+        {(isRetailer || isSalesman) ? (
+          <View style={{ gap: 0 }}>
+            <View style={styles.dots}>
+              {activeBanners.map((_, i) => (
+                <View key={i} style={[styles.dot, i === bannerIndex && styles.dotActive]} />
+              ))}
+            </View>
+            <BrakePadCard
+              leftAction={{ label: quickActions[0].label, desc: quickActions[0].desc, route: quickActions[0].route, icon: (quickActions[0] as any).icon, iconColor: (quickActions[0] as any).iconColor, iconBg: (quickActions[0] as any).iconBg }}
+              rightAction={{ label: quickActions[1].label, desc: quickActions[1].desc, route: quickActions[1].route, icon: (quickActions[1] as any).icon, iconColor: (quickActions[1] as any).iconColor, iconBg: (quickActions[1] as any).iconBg }}
+              centerRoute="/(user)/orders"
+              centerLabel="ORDER"
+            />
+            {isRetailer && (
+              <View style={[styles.statRow, { marginTop: 4 }]}>
+                <TouchableOpacity
+                  style={[styles.statCard, styles.statCardSmall, { backgroundColor: "#065F46" }]}
+                  onPress={() => router.push("/(user)/orders" as any)}
+                  activeOpacity={0.82}
+                >
+                  <Feather name="package" size={20} color="rgba(255,255,255,0.85)" style={{ marginBottom: 6 }} />
+                  <Text style={styles.statCardLabel}>Confirmed Orders</Text>
+                  <Text style={styles.statCardSub}>
+                    {retailStats.confirmedValue > 0 ? `Rs. ${retailStats.confirmedValue.toLocaleString()}` : "tap to view"}
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.statCard, styles.statCardSmall, { backgroundColor: "#7B2FBE" }]}
+                  onPress={() => router.push("/(user)/rewards" as any)}
+                  activeOpacity={0.82}
+                >
+                  <Text style={{ fontSize: 22, marginBottom: 6 }}>🎁</Text>
+                  <Text style={styles.statCardLabel}>Offers</Text>
+                  <Text style={styles.statCardSub}>view rewards & offers</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+          </View>
+        ) : (
+          <View style={styles.dots}>
+            {activeBanners.map((_, i) => (
+              <View key={i} style={[styles.dot, i === bannerIndex && styles.dotActive]} />
+            ))}
+          </View>
+        )}
+
+
+        {/* Quick actions — mechanics only */}
+        {!isRetailer && !isSalesman && (
+          <View style={styles.quickGrid}>
+            {quickActions.map((action, i) => (
+              <TouchableOpacity
+                key={action.label}
+                style={[
+                  styles.gridCard,
+                  { backgroundColor: action.accent },
+                  i === 0 ? { borderBottomRightRadius: 28 } : { borderBottomLeftRadius: 28 },
+                ]}
+                onPress={() => router.push(action.route as any)}
+                activeOpacity={0.82}
+              >
+                <View style={[styles.gridIcon, { backgroundColor: action.iconBg }]}>
+                  <Text style={styles.gridIconText}>{action.icon}</Text>
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.gridCardTitle}>{action.label}</Text>
+                  <Text style={styles.gridCardDesc}>{action.desc}</Text>
+                </View>
+              </TouchableOpacity>
+            ))}
+          </View>
+        )}
+      </ScrollView>
+
+      {/* Claim modal */}
+      <Modal visible={claimModalVisible} transparent animationType="slide" onRequestClose={() => setClaimModalVisible(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modal, { paddingBottom: insets.bottom + 24 }]}>
+            <View style={styles.modalHandle} />
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Claim Rewards</Text>
+              <TouchableOpacity onPress={() => setClaimModalVisible(false)} style={styles.closeBtn}>
+                <Text style={styles.closeBtnText}>✕</Text>
+              </TouchableOpacity>
+            </View>
+
+            {justClaimed !== null ? (
+              <View style={styles.successBox}>
+                <View style={styles.successRing}>
+                  <Text style={styles.successCheck}>✓</Text>
+                </View>
+                <Text style={styles.successTitle}>Claimed Successfully!</Text>
+                <Text style={styles.successPts}>{justClaimed} pts</Text>
+                <Text style={styles.successSub}>Your points have been submitted for payment</Text>
+              </View>
+            ) : (
+              <View style={styles.claimSection}>
+                {displayPoints > 0 ? (
+                  <>
+                    <View style={styles.claimPointsCard}>
+                      <View style={styles.claimPointsRow}>
+                        <View style={styles.claimPointsBox}>
+                          <Text style={styles.claimPointsLbl}>Available</Text>
+                          <Text style={styles.claimPointsNum}>{displayPoints}</Text>
+                          <Text style={styles.claimPointsUnit}>pts</Text>
+                        </View>
+                        <Text style={styles.claimArrow}>→</Text>
+                        <View style={[styles.claimPointsBox, styles.claimPointsBoxGreen]}>
+                          <Text style={[styles.claimPointsLbl, { color: Colors.success }]}>To Claim</Text>
+                          <Text style={[styles.claimPointsNum, { color: Colors.success }]}>{displayPoints}</Text>
+                          <Text style={[styles.claimPointsUnit, { color: Colors.success }]}>pts</Text>
+                        </View>
+                      </View>
+                    </View>
+                    <TouchableOpacity
+                      style={[styles.claimBtn, claiming && { opacity: 0.6 }]}
+                      onPress={confirmClaim}
+                      disabled={claiming}
+                      activeOpacity={0.85}
+                    >
+                      {claiming
+                        ? <ActivityIndicator color={Colors.white} />
+                        : <Text style={styles.claimBtnText}>Claim {displayPoints} Points</Text>
+                      }
+                    </TouchableOpacity>
+                  </>
+                ) : (
+                  <View style={styles.noPointsBox}>
+                    <Text style={styles.noPointsTitle}>No Points Yet</Text>
+                    <Text style={styles.noPointsTxt}>Scan QR codes after service visits to earn points</Text>
+                  </View>
+                )}
+              </View>
+            )}
+
+            <View style={styles.divider}>
+              <View style={styles.dividerLine} />
+              <Text style={styles.dividerText}>Claim History</Text>
+              <View style={styles.dividerLine} />
+            </View>
+
+            {loadingHistory ? (
+              <ActivityIndicator color={Colors.primary} style={{ marginVertical: 20 }} />
+            ) : claimHistory.length === 0 ? (
+              <Text style={styles.historyEmpty}>No claims yet</Text>
+            ) : (
+              <ScrollView style={styles.historyList} showsVerticalScrollIndicator={false}>
+                {claimHistory.map((c) => {
+                  const isPending = c.status === "pending";
+                  return (
+                    <View key={c.id} style={styles.historyItem}>
+                      <View style={[styles.historyDotWrap, { backgroundColor: isPending ? `${Colors.primary}18` : `${Colors.success}18` }]}>
+                        <Text style={[styles.historyDotText, { color: isPending ? Colors.primary : Colors.success }]}>
+                          {isPending ? "⏳" : "✓"}
+                        </Text>
+                      </View>
+                      <View style={styles.historyTextWrap}>
+                        <Text style={styles.historyPts}>{c.pointsClaimed} points claimed</Text>
+                        <Text style={styles.historyDate}>{formatDate(c.claimedAt)}</Text>
+                      </View>
+                      <View style={[styles.statusBadge, isPending ? styles.statusPending : styles.statusReceived]}>
+                        <Text style={[styles.statusText, { color: isPending ? Colors.primary : Colors.success }]}>
+                          {isPending ? "Pending" : "Received"}
+                        </Text>
+                      </View>
+                    </View>
+                  );
+                })}
+              </ScrollView>
+            )}
+          </View>
+        </View>
+      </Modal>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: "#F7F4F1" },
+
+  header: {
+    flexDirection: "row", alignItems: "center", justifyContent: "space-between",
+    paddingHorizontal: 20, paddingVertical: 14,
+    backgroundColor: Colors.white,
+    borderBottomWidth: 1, borderBottomColor: Colors.border,
+  },
+  headerGreet: { fontSize: 18, fontFamily: "Inter_700Bold", color: Colors.text },
+  headerSub: { fontSize: 12, fontFamily: "Inter_400Regular", color: Colors.textSecondary, marginTop: 1 },
+  headerLeft: { flexDirection: "row", alignItems: "center", gap: 10, flex: 1 },
+  waBtn: {
+    width: 42, height: 42, borderRadius: 21,
+    backgroundColor: "#E8F8EF",
+    justifyContent: "center", alignItems: "center",
+  },
+  waBtnText: { fontSize: 20 },
+  headerAvatar: {
+    width: 42, height: 42, borderRadius: 21,
+    borderWidth: 2, overflow: "hidden",
+    justifyContent: "center", alignItems: "center",
+  },
+  headerAvatarImg: { width: 42, height: 42, borderRadius: 21 },
+  headerAvatarFallback: {
+    width: 42, height: 42, borderRadius: 21,
+    justifyContent: "center", alignItems: "center",
+  },
+  headerAvatarText: { fontSize: 16, fontFamily: "Inter_700Bold", color: "#fff" },
+
+  scroll: { flex: 1 },
+  scrollContent: { padding: 16, gap: 18, paddingBottom: 32 },
+
+  /* ── Hero Points Card ─────────────────────────────────────────── */
+  heroCard: {
+    borderRadius: 28,
+    padding: 22,
+    overflow: "hidden",
+    shadowColor: Colors.primary,
+    shadowOpacity: 0.4,
+    shadowRadius: 20,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 10,
+  },
+  decCircle1: {
+    position: "absolute", width: 160, height: 160, borderRadius: 80,
+    backgroundColor: "rgba(255,255,255,0.1)",
+    top: -50, right: -40,
+  },
+  decCircle2: {
+    position: "absolute", width: 100, height: 100, borderRadius: 50,
+    backgroundColor: "rgba(255,255,255,0.07)",
+    top: 30, right: 30,
+  },
+  decCircle3: {
+    position: "absolute", width: 70, height: 70, borderRadius: 35,
+    backgroundColor: "rgba(0,0,0,0.08)",
+    bottom: -20, left: -20,
+  },
+  decCircle4: {
+    position: "absolute", width: 50, height: 50, borderRadius: 25,
+    backgroundColor: "rgba(255,255,255,0.06)",
+    bottom: 20, right: 90,
+  },
+  heroTopRow: {
+    flexDirection: "row", alignItems: "center", marginBottom: 16,
+  },
+  heroBadge: {
+    backgroundColor: "rgba(255,255,255,0.2)",
+    borderRadius: 20, paddingHorizontal: 12, paddingVertical: 5,
+    borderWidth: 1, borderColor: "rgba(255,255,255,0.3)",
+  },
+  heroBadgeText: {
+    fontSize: 12, fontFamily: "Inter_600SemiBold", color: "#fff", letterSpacing: 0.3,
+  },
+  heroPointsRow: {
+    flexDirection: "row", alignItems: "flex-end", gap: 8, marginBottom: 4,
+  },
+  heroValue: {
+    fontSize: 64,
+    fontFamily: "Inter_700Bold",
+    color: Colors.white,
+    lineHeight: 68,
+    includeFontPadding: false,
+    letterSpacing: -1,
+  },
+  heroUnit: {
+    fontSize: 20, fontFamily: "Inter_700Bold",
+    color: "rgba(255,255,255,0.7)",
+    marginBottom: 10,
+    marginTop: 2,
+  },
+  heroLabel: {
+    fontSize: 14, fontFamily: "Inter_600SemiBold", color: "rgba(255,255,255,0.8)",
+    marginBottom: 6, textTransform: "uppercase", letterSpacing: 1,
+  },
+
+  /* ── Stat mini-cards ────────────────────────────────────────────── */
+  statRow: {
+    flexDirection: "row",
+    gap: 12,
+  },
+  statCard: {
+    flex: 1,
+    borderRadius: 18,
+    padding: 16,
+    justifyContent: "flex-end",
+    alignItems: "center",
+    minHeight: 110,
+    shadowColor: "#000",
+    shadowOpacity: 0.18,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 5,
+  },
+  statCardSmall: {
+    padding: 12,
+    minHeight: 90,
+    borderRadius: 14,
+    justifyContent: "flex-end",
+    alignItems: "center",
+    position: "relative",
+  },
+  notifBadge: {
+    position: "absolute",
+    top: 8,
+    right: 8,
+    backgroundColor: "#EF4444",
+    borderRadius: 10,
+    minWidth: 20,
+    height: 20,
+    paddingHorizontal: 5,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  notifBadgeText: {
+    fontSize: 11,
+    fontFamily: "Inter_700Bold",
+    color: "#fff",
+  },
+  statCardLabel: {
+    fontSize: 9,
+    fontFamily: "Inter_600SemiBold",
+    color: "rgba(255,255,255,0.7)",
+    letterSpacing: 0.8,
+    textTransform: "uppercase",
+    marginBottom: 4,
+    textAlign: "center",
+  },
+  statCardValue: {
+    fontSize: 22,
+    fontFamily: "Inter_700Bold",
+    color: Colors.white,
+    includeFontPadding: false,
+    textAlign: "center",
+  },
+  statCardSub: {
+    fontSize: 10,
+    fontFamily: "Inter_400Regular",
+    color: "rgba(255,255,255,0.6)",
+    marginTop: 3,
+    textAlign: "center",
+  },
+
+  heroSub: {
+    fontSize: 13, fontFamily: "Inter_400Regular",
+    color: "rgba(255,255,255,0.65)", marginBottom: 18,
+  },
+  heroDivider: {
+    height: 1, backgroundColor: "rgba(255,255,255,0.2)", marginBottom: 16,
+  },
+  heroBottom: {
+    flexDirection: "row", alignItems: "center", justifyContent: "space-between",
+  },
+  heroBottomLeft: { flex: 1 },
+  heroBottomLabel: {
+    fontSize: 13, fontFamily: "Inter_600SemiBold", color: "#fff",
+  },
+  heroBottomSub: {
+    fontSize: 11, fontFamily: "Inter_400Regular", color: "rgba(255,255,255,0.6)", marginTop: 2,
+  },
+  claimChip: {
+    backgroundColor: "rgba(255,255,255,0.22)",
+    borderRadius: 24, paddingHorizontal: 18, paddingVertical: 10,
+    borderWidth: 1.5, borderColor: "rgba(255,255,255,0.5)",
+  },
+  claimChipText: {
+    fontSize: 13, fontFamily: "Inter_700Bold", color: "#fff", letterSpacing: 0.3,
+  },
+  claimChipDisabled: {
+    backgroundColor: "rgba(255,255,255,0.12)",
+    borderRadius: 24, paddingHorizontal: 14, paddingVertical: 10,
+  },
+  claimChipDisabledText: {
+    fontSize: 11, fontFamily: "Inter_500Medium", color: "rgba(255,255,255,0.5)",
+  },
+
+  bannerScroll: { borderRadius: 18, zIndex: 5, elevation: 5 },
+  banner: { height: 140, borderRadius: 18, padding: 20, justifyContent: "flex-end", gap: 4 },
+  bannerImage: { height: 140, borderRadius: 18 },
+  bannerTitle: { fontSize: 17, fontFamily: "Inter_700Bold", color: Colors.white },
+  bannerSubtitle: { fontSize: 12, fontFamily: "Inter_400Regular", color: "rgba(255,255,255,0.82)" },
+  dots: { flexDirection: "row", justifyContent: "center", gap: 5, marginTop: -8, zIndex: 10 },
+  dot: { width: 5, height: 5, borderRadius: 3, backgroundColor: "#D9C9BF" },
+  dotActive: { backgroundColor: Colors.primary, width: 16 },
+
+  sectionLabel: {
+    fontSize: 13, fontFamily: "Inter_700Bold",
+    color: Colors.textSecondary, letterSpacing: 0.5,
+    textTransform: "uppercase", marginBottom: -4,
+  },
+  quickGrid: { flexDirection: "row", flexWrap: "wrap", gap: 12 },
+  identifyCard: {
+    flexDirection: "row", alignItems: "center", gap: 14,
+    backgroundColor: "#FFF4EC", borderRadius: 18, padding: 16, marginTop: 12,
+    borderWidth: 1.5, borderColor: "#E8772240",
+  },
+  identifyIconWrap: {
+    width: 46, height: 46, borderRadius: 23,
+    backgroundColor: "#FFE8D0", alignItems: "center", justifyContent: "center",
+    flexShrink: 0,
+  },
+  identifyTitle: { fontSize: 15, fontFamily: "Inter_600SemiBold", color: "#C5611A" },
+  identifyDesc: { fontSize: 12, fontFamily: "Inter_400Regular", color: "#E87722", marginTop: 2, lineHeight: 17 },
+  gridCard: {
+    width: "47%",
+    borderRadius: 18, padding: 12,
+    flexDirection: "row",
+    gap: 12,
+    alignItems: "center",
+  },
+  gridIcon: {
+    width: 42, height: 42, borderRadius: 12,
+    justifyContent: "center", alignItems: "center",
+    flexShrink: 0,
+  },
+  gridIconText: { fontSize: 20 },
+  gridCardTitle: { fontSize: 14, fontFamily: "Inter_700Bold", color: Colors.text },
+  gridCardDesc: { fontSize: 11, fontFamily: "Inter_400Regular", color: Colors.textSecondary, marginTop: 2 },
+
+
+  modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "flex-end" },
+  modal: {
+    backgroundColor: Colors.white, borderTopLeftRadius: 32, borderTopRightRadius: 32,
+    paddingTop: 12, paddingHorizontal: 20, maxHeight: "88%",
+  },
+  modalHandle: { width: 40, height: 4, borderRadius: 2, backgroundColor: Colors.border, alignSelf: "center", marginBottom: 16 },
+  modalHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 20 },
+  modalTitle: { fontSize: 20, fontFamily: "Inter_700Bold", color: Colors.text },
+  closeBtn: { width: 32, height: 32, borderRadius: 16, backgroundColor: "#F0F0F0", justifyContent: "center", alignItems: "center" },
+  closeBtnText: { fontSize: 14, fontFamily: "Inter_600SemiBold", color: Colors.textSecondary },
+
+  successBox: { alignItems: "center", paddingVertical: 24, gap: 8 },
+  successRing: {
+    width: 80, height: 80, borderRadius: 40,
+    borderWidth: 3, borderColor: Colors.success,
+    justifyContent: "center", alignItems: "center",
+    backgroundColor: `${Colors.success}10`, marginBottom: 8,
+  },
+  successCheck: { fontSize: 32, color: Colors.success },
+  successTitle: { fontSize: 20, fontFamily: "Inter_700Bold", color: Colors.text },
+  successPts: { fontSize: 44, fontFamily: "Inter_700Bold", color: Colors.success },
+  successSub: { fontSize: 13, fontFamily: "Inter_400Regular", color: Colors.textSecondary, textAlign: "center", maxWidth: 240 },
+
+  claimSection: { marginBottom: 4 },
+  claimPointsCard: { backgroundColor: "#F7F4F1", borderRadius: 16, padding: 16, marginBottom: 14 },
+  claimPointsRow: { flexDirection: "row", alignItems: "center", gap: 12 },
+  claimPointsBox: {
+    flex: 1, backgroundColor: Colors.white, borderRadius: 12,
+    padding: 14, alignItems: "center", gap: 2,
+    borderWidth: 1, borderColor: Colors.border,
+  },
+  claimPointsBoxGreen: { borderColor: `${Colors.success}30`, backgroundColor: `${Colors.success}08` },
+  claimArrow: { fontSize: 20, color: Colors.textLight },
+  claimPointsLbl: { fontSize: 11, fontFamily: "Inter_500Medium", color: Colors.textSecondary },
+  claimPointsNum: { fontSize: 26, fontFamily: "Inter_700Bold", color: Colors.primary },
+  claimPointsUnit: { fontSize: 11, fontFamily: "Inter_500Medium", color: Colors.textSecondary },
+  claimBtn: {
+    backgroundColor: Colors.success, borderRadius: 16, paddingVertical: 16,
+    alignItems: "center", justifyContent: "center",
+  },
+  claimBtnText: { color: Colors.white, fontSize: 16, fontFamily: "Inter_700Bold" },
+  noPointsBox: { alignItems: "center", paddingVertical: 24, gap: 8 },
+  noPointsTitle: { fontSize: 16, fontFamily: "Inter_600SemiBold", color: Colors.text },
+  noPointsTxt: { fontSize: 13, fontFamily: "Inter_400Regular", color: Colors.textSecondary, textAlign: "center", maxWidth: 240 },
+
+  divider: { flexDirection: "row", alignItems: "center", gap: 10, marginVertical: 20 },
+  dividerLine: { flex: 1, height: 1, backgroundColor: Colors.border },
+  dividerText: { fontSize: 11, fontFamily: "Inter_600SemiBold", color: Colors.textLight, letterSpacing: 0.5 },
+
+  historyEmpty: { textAlign: "center", color: Colors.textLight, fontFamily: "Inter_400Regular", fontSize: 14, marginBottom: 16 },
+  historyList: { maxHeight: 220 },
+  historyItem: {
+    flexDirection: "row", alignItems: "center", gap: 12,
+    paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: Colors.border,
+  },
+  historyDotWrap: { width: 32, height: 32, borderRadius: 10, justifyContent: "center", alignItems: "center" },
+  historyDotText: { fontSize: 14 },
+  historyTextWrap: { flex: 1 },
+  historyPts: { fontSize: 14, fontFamily: "Inter_600SemiBold", color: Colors.text },
+  historyDate: { fontSize: 11, fontFamily: "Inter_400Regular", color: Colors.textLight, marginTop: 2 },
+  statusBadge: { borderRadius: 20, paddingHorizontal: 10, paddingVertical: 4 },
+  statusPending: { backgroundColor: `${Colors.primary}15` },
+  statusReceived: { backgroundColor: `${Colors.success}15` },
+  statusText: { fontSize: 11, fontFamily: "Inter_700Bold" },
+});
