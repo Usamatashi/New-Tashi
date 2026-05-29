@@ -17,7 +17,7 @@ export async function playTransactionRecordedFeedback(): Promise<void> {
 
     if (!transactionSound) {
       const { sound } = await Audio.Sound.createAsync(
-        require("@/assets/sounds/transaction.wav"),
+        require("@/assets/sounds/transaction.mp3"),
         { shouldPlay: false },
       );
       transactionSound = sound;
